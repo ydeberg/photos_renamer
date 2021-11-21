@@ -1,9 +1,48 @@
 import os, sys, time, re, json
-
-from PyQt5.QtWidgets import QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStyle, QVBoxLayout, QWidget, QSplitter, QFrame, QSizePolicy
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import QDir, pyqtSignal, QSize
+from send2trash import send2trash
+from PIL import Image
+from PyQt5.QtWidgets import QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStyle, QVBoxLayout, QWidget, QSplitter, QFrame, QSizePolicy, QScrollArea, QMenu, QMessageBox, QDialog, QRadioButton
+from PyQt5.QtGui import QPixmap, QPalette, QIcon, QTransform
+from PyQt5.QtCore import QDir, pyqtSignal, QSize, QTimer, QEvent, QObject
 from PyQt5.QtCore import Qt
+
+stylesheet = """
+	QWidget {
+    background: rgb(23, 23, 23);
+    border: none;
+    font: bold large;
+    color: rgb(153, 153, 153);
+	}
+	QFrame {
+    background: rgb(123, 123, 123);
+    border: 10px ; border-color: white;
+    font: bold large;
+    color: rgb(153, 153, 153);
+	}
+	QPushButton {
+	    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+	    stop:0 rgb(84, 84, 84), stop:1 rgb(53, 53, 53));
+	}
+	QPushButton:hover {
+	    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+	    stop:0 rgb(79, 99, 44), stop:1 rgb(59, 75, 29));
+	    color: rgb(194, 224, 104);
+	}
+	QPushButton:disabled {
+		background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    	stop:0 rgb(113, 113, 113), stop:1 rgb(103, 103, 103));
+    	color: rgb(133, 133, 133);
+	}
+	QLineEdit {
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgb(153, 153, 153);
+    background: rgb(53, 53, 53);
+	}
+	QSplitter::handle:vertical {
+	    height: 10px;
+	}
+"""
 
 class FolderBrowser(QWidget):
 	folderChanged = pyqtSignal(str)
@@ -82,8 +121,7 @@ class ImageDisplay(QWidget):
 	def id(self, value):
 		if value>=0 and value<len(self.images):
 			self._id = value
-			img = self.currentFile
-			self.pixmap = QPixmap(img)
+			self.load_img()
 			self.display()
 
 	@property 
@@ -117,9 +155,11 @@ class ImageDisplay(QWidget):
 		self.setLayout(QHBoxLayout())
 
 		self.leftBtn = QPushButton("<")
+		self.leftBtn.setMinimumWidth(80)
 		self.leftBtn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.MinimumExpanding)
 		self.leftBtn.clicked.connect(self.previousPhoto)
 		self.leftBtn.setEnabled(False)
+		self.leftBtn.setStyleSheet(" font-size: 40px; ")
 		self.layout().addWidget(self.leftBtn)
 		self.layout().addStretch()
 
@@ -141,9 +181,11 @@ class ImageDisplay(QWidget):
 		self.layout().addStretch()
 
 		self.rightBtn = QPushButton(">")
+		self.rightBtn.setMinimumWidth(80)
 		self.rightBtn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.MinimumExpanding)
 		self.rightBtn.clicked.connect(self.nextPhoto)
 		self.rightBtn.setEnabled(False)
+		self.rightBtn.setStyleSheet(" font-size: 40px; ")
 		self.layout().addWidget(self.rightBtn)
 		self.folder = folder
 
@@ -178,6 +220,11 @@ class ImageDisplay(QWidget):
 	def init_id(self):
 		self.id = 0
 
+	def load_img(self):
+		img = self.currentFile
+		if img:
+			self.pixmap = QPixmap(img)
+
 	def handle_buttons(self):
 		if not len(self.images):
 			self.rightBtn.setEnabled(False)
@@ -202,11 +249,12 @@ class ImageDisplay(QWidget):
 			self.id += 1
 
 	def accept(self, newname):
-		print("image has been renamed to %s" % newname)
-		print(self.images)
 		self.images[self.id] = newname
-		print(self.images)
 		self.nextPhoto()
+
+	def refreshFile(self):
+		self.load_img()
+		self.display()
 
 	def refresh(self):
 		files = os.listdir(self.folder)
@@ -235,6 +283,72 @@ class ImageDisplay(QWidget):
 		self.resizeImages()
 		super(ImageDisplay, self).resizeEvent(e)
 
+	def discardCurrent(self):
+		del self.images[self.id]
+		if self.id < len(self.images):
+			self.id = self.id
+		else:
+			self.id = self.id-1
+
+class RenamableLabel(QWidget):
+	def __init__(self, text):
+		super(RenamableLabel, self).__init__()
+
+		self.setLayout(QVBoxLayout())
+		self.layout().setContentsMargins(0, 0, 0, 0)
+		self.label = QLabel(text)
+		self.layout().addWidget(self.label)
+		self.edit = QLineEdit("")
+		self.edit.editingFinished.connect(self.completeEdit)
+		self.edit.hide()
+		self.layout().addWidget(self.edit)
+
+		self.timer = QTimer()
+		self.timer.setInterval(250)
+		self.timer.setSingleShot(True)
+		self.timer.timeout.connect(self.timeout)
+		self.click_count = 0
+
+	def timeout(self):
+		if self.click_count == 1:
+			self.singleClick()
+		elif self.click_count > 1:
+			self.doubleClick()
+		self.click_count = 0
+
+	def mousePressEvent(self, e):
+		self.click_count += 1
+		if not self.timer.isActive():
+			self.timer.start()
+
+	def singleClick(self):
+		pass
+
+	def doubleClick(self):
+		self.edit.setText(self.text())
+		self.label.hide()
+		self.edit.show()
+		self.edit.selectAll()
+		self.edit.setFocus(True)
+
+	def text(self):
+		return self.label.text()
+
+	def setText(self, text):
+		self.label.setText(text)
+
+	def setAlignment(self, alignment):
+		self.label.setAlignment(alignment)
+		self.edit.setAlignment(alignment)
+
+	def isEditted(self):
+		return not self.edit.isHidden()
+
+	def completeEdit(self):
+		self.setText(self.edit.text())
+		self.edit.hide()
+		self.label.show()
+
 class Tag(QWidget):
 	deleteSg = pyqtSignal()
 	def __init__(self, name, checked=False):
@@ -262,6 +376,11 @@ class Tag(QWidget):
 		return self.chk.isChecked()
 
 class TagsTemplate(QWidget):
+	tabDeletedSg = pyqtSignal()
+	@property
+	def name(self):
+		return self.title.text()
+
 	@property
 	def availableNames(self):
 		return [x.name for x in self.widgets]
@@ -272,9 +391,75 @@ class TagsTemplate(QWidget):
 	
 	def __init__(self, name, names):
 		super(TagsTemplate, self).__init__()
-		self.name = name
+
+		stylesheet = """
+			QWidget {
+		    background: rgb(63, 63, 63);
+		    border: none;
+		    font: bold large;
+		    color: rgb(153, 153, 153);
+			}
+			QFrame {
+		    background: rgb(63, 63, 63);
+		    border: 10px ; border-color: white;
+		    font: bold large;
+		    color: rgb(153, 153, 153);
+			}
+			QPushButton {
+			    background: none;
+			}
+			QPushButton:hover {
+			    background-color: rgb(79, 99, 44);
+			    color: rgb(194, 224, 104);
+			}
+			QPushButton:disabled {
+				background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+		    	stop:0 rgb(113, 113, 113), stop:1 rgb(103, 103, 103));
+		    	color: rgb(133, 133, 133);
+			}
+			QLineEdit {
+		    border-width: 1px;
+		    border-style: solid;
+		    border-color: rgb(153, 153, 153);
+		    background: rgb(53, 53, 53);
+		    padding: 1px 0px 2px 0px;
+			}
+			QSplitter::handle:vertical {
+			    height: 10px;
+			}
+			QLabel {
+				border-radius: 2px;
+				padding: 3px 0px 5px 0px;
+			}
+			QCheckBox:hover {
+			    background-color: rgb(79, 99, 44);
+			    color: rgb(194, 224, 104);
+			}
+		"""
+		self.setStyleSheet(stylesheet)
+
+		self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)
 		self.names = names
 		self.widgets = []
+		self.setLayout(QVBoxLayout())
+		self.layout().setContentsMargins(0, 0, 0, 0)
+		self.layout().setSpacing(0)
+
+		self.title = RenamableLabel(name)
+		self.title.setAlignment(Qt.AlignCenter)
+		self.layout().addWidget(self.title)
+
+		self.scroll = QScrollArea()
+		self.layout().addWidget(self.scroll)
+
+		#this is necessary for the widget to take an appropriate size
+		self.scroll.setWidgetResizable(False)
+		self.scroll.setWidgetResizable(True)
+
+		self.widget = QWidget()
+		self.scroll.setWidget(self.widget)
+
+		self.widget.setLayout(QVBoxLayout())
 
 	def deleteWidget(self, w):
 		self.widgets.remove(w)
@@ -284,7 +469,7 @@ class TagsTemplate(QWidget):
 		txt = self.extraEdit.text()
 		if txt and not txt in self.availableNames:
 			w = Tag(txt)
-			self.layout().insertWidget(len(self.widgets)+1, w)
+			self.widget.layout().insertWidget(len(self.widgets), w)
 			self.widgets.append(w)
 			w.deleteSg.connect(lambda x=w:self.deleteWidget(x))
 			self.extraEdit.clear()
@@ -303,6 +488,21 @@ class TagsTemplate(QWidget):
 			"checked":w.isChecked()})
 		return output
 
+	def addWidget(self, w):
+		self.widget.layout().addWidget(w)
+
+	def addStretch(self):
+		self.widget.layout().addStretch()
+
+	def contextMenuEvent(self, event):
+		contextMenu = QMenu(self)
+		deleteAct = contextMenu.addAction("Delete Tab")
+		action = contextMenu.exec_(self.mapToGlobal(event.pos()))
+		if action == deleteAct:
+			ret = QMessageBox.question(self,'', "Do you really want to delete the tab?", QMessageBox.Yes | QMessageBox.No)
+			if ret == QMessageBox.Yes:
+				self.tabDeletedSg.emit()
+		
 class TagsTab(TagsTemplate):
 	@property
 	def tabType(self):
@@ -310,23 +510,65 @@ class TagsTab(TagsTemplate):
 
 	def __init__(self, name, names):
 		super(TagsTab, self).__init__(name, names)
-		self.setLayout(QVBoxLayout())
 
-		self.title = QLabel(self.name)
-		self.layout().addWidget(self.title)
+		# stylesheet = """
+		# 	QWidget {
+		#     background: rgb(63, 63, 63);
+		#     border: none;
+		#     font: bold large;
+		#     color: rgb(153, 153, 153);
+		# 	}
+		# 	QFrame {
+		#     background: rgb(63, 63, 63);
+		#     border: 10px ; border-color: white;
+		#     font: bold large;
+		#     color: rgb(153, 153, 153);
+		# 	}
+		# 	QPushButton {
+		# 	    background: none;
+		# 	}
+		# 	QPushButton:hover {
+		# 	    background-color: rgb(79, 99, 44);
+		# 	    color: rgb(194, 224, 104);
+		# 	}
+		# 	QPushButton:disabled {
+		# 		background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+		#     	stop:0 rgb(113, 113, 113), stop:1 rgb(103, 103, 103));
+		#     	color: rgb(133, 133, 133);
+		# 	}
+		# 	QLineEdit {
+		#     border-width: 1px;
+		#     border-style: solid;
+		#     border-color: rgb(153, 153, 153);
+		#     background: rgb(53, 53, 53);
+		#     padding: 1px 0px 2px 0px;
+		# 	}
+		# 	QSplitter::handle:vertical {
+		# 	    height: 10px;
+		# 	}
+		# 	QLabel {
+		# 		border-radius: 2px;
+		# 		padding: 3px 0px 5px 0px;
+		# 	}
+		# 	QCheckBox:hover {
+		# 	    background-color: rgb(79, 99, 44);
+		# 	    color: rgb(194, 224, 104);
+		# 	}
+		# """
+		# self.setStyleSheet(stylesheet)
 
 		for i in names:
 			w = Tag(i["name"], i["checked"])
-			self.layout().addWidget(w)
+			self.addWidget(w)
 			self.widgets.append(w)
 
 			w.deleteSg.connect(lambda x=w:self.deleteWidget(x))
 
 		self.extraEdit = QLineEdit()
 		self.extraEdit.returnPressed.connect(self.addName)
-		self.layout().addWidget(self.extraEdit)
+		self.addWidget(self.extraEdit)
 
-		self.layout().addStretch()
+		self.addStretch()
 
 class DateTab(TagsTemplate):
 	@property
@@ -335,19 +577,14 @@ class DateTab(TagsTemplate):
 	
 	def __init__(self, content=""):
 		super(DateTab, self).__init__("date", [])
-		self.name = "date"
-		self.setLayout(QVBoxLayout())
-
-		self.title = QLabel(self.name)
-		self.layout().addWidget(self.title)
 
 		self.dateEdit = QLineEdit("YYYY_MM")
 		if content:
 			self.dateEdit.setText(content)
 
-		self.layout().addWidget(self.dateEdit)
+		self.addWidget(self.dateEdit)
 
-		self.layout().addStretch()
+		self.addStretch()
 
 	def tags(self, file):
 		txt = self.dateEdit.text()
@@ -388,6 +625,34 @@ class DateTab(TagsTemplate):
 	def state(self):
 		return self.dateEdit.text()
 
+class NewTabDialog(QDialog):
+	@property
+	def tab(self):
+		if self.regularTabRdb.isChecked():
+			return "regular"
+		elif self.dateTabRdb.isChecked():
+			return "date"
+	
+	def __init__(self):
+		super(NewTabDialog, self).__init__()
+		self.setLayout(QVBoxLayout())
+		self.regularTabRdb = QRadioButton("regular tab")
+		self.regularTabRdb.setChecked(Qt.Checked)
+		self.dateTabRdb = QRadioButton("date tab")
+		self.layout().addWidget(self.regularTabRdb)
+		self.layout().addWidget(self.dateTabRdb)
+
+		self.btnLayout = QHBoxLayout()
+		self.layout().addLayout(self.btnLayout)
+
+		self.okBtn = QPushButton("OK")
+		self.okBtn.clicked.connect(self.accept)
+		self.btnLayout.addWidget(self.okBtn)
+
+		self.cancelBtn = QPushButton("Cancel")
+		self.cancelBtn.clicked.connect(self.reject)
+		self.btnLayout.addWidget(self.cancelBtn)
+
 class TagsManager(QWidget):
 	@property
 	def state(self):
@@ -401,6 +666,7 @@ class TagsManager(QWidget):
 	def __init__(self, state):
 		super(TagsManager, self).__init__()
 		self.setLayout(QHBoxLayout())
+		self.layout().setAlignment(Qt.AlignTop)
 		self.tagstabs = []
 
 		if state:
@@ -408,13 +674,18 @@ class TagsManager(QWidget):
 				widgets = []
 				for tab in state:
 					if tab["type"] == "DateTab":
-						widgets.append(DateTab(tab["content"]))
+						w = DateTab(tab["content"])
+						w.tabDeletedSg.connect(lambda x=w:self.tabDelete(x))
+						widgets.append(w)
 					elif tab["type"] == "TagsTab":
-						widgets.append(TagsTab(tab["name"], tab["content"]))
+						w = TagsTab(tab["name"], tab["content"])
+						w.tabDeletedSg.connect(lambda x=w:self.tabDelete(x))
+						widgets.append(w)
 
 				for w in widgets:
 					self.tagstabs.append(w)
 					self.layout().addWidget(w)
+			
 			except Exception as e:
 				print(e)
 				print("failed to load config. Skipping.")
@@ -438,6 +709,13 @@ class TagsManager(QWidget):
 				self.tagstabs.append(w)
 				self.layout().addWidget(w)
 
+		self.addBtn = QPushButton("+")
+		self.addBtn.clicked.connect(self.newTabRequest)
+		self.addBtn.setFixedWidth(35)
+		self.addBtn.setMaximumHeight(190)
+		self.addBtn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)
+		self.addBtn.setStyleSheet(" font-size: 25px; ")
+		self.layout().addWidget(self.addBtn)
 		self.layout().addStretch()
 
 	def tags(self, file):
@@ -446,6 +724,30 @@ class TagsManager(QWidget):
 			for t in w.tags(file):
 				tags.append(t)
 		return tags
+
+	def tabDelete(self, w):
+		self.tagstabs.remove(w)
+		w.deleteLater()
+
+	def newTabRequest(self):
+		dialog = NewTabDialog()
+		ret = dialog.exec()
+		if ret:
+			if dialog.tab == "regular":
+				w = TagsTab("misc", [])
+				w.tabDeletedSg.connect(lambda x=w:self.tabDelete(x))
+				self.tagstabs.append(w)
+				self.layout().insertWidget(len(self.tagstabs)-1, w)
+			elif dialog.tab == "date":
+				w = DateTab("YYYY_MM")
+				w.tabDeletedSg.connect(lambda x=w:self.tabDelete(x))
+				self.tagstabs.append(w)
+				self.layout().insertWidget(len(self.tagstabs)-1, w)
+
+	def acceptTabsNames(self):
+		for tab in self.tagstabs:
+			if tab.title.isEditted():
+				tab.title.completeEdit()
 
 class MainWindow(QWidget):
 	def __init__(self, folder):
@@ -478,9 +780,44 @@ class MainWindow(QWidget):
 		self.imageDisplay = ImageDisplay(self.folder)
 		self.topWidget.layout().addWidget(self.imageDisplay)
 
+		self.btnLayout = QHBoxLayout()
+		self.bottomWidget.layout().setSpacing(2)
+		self.bottomWidget.layout().setContentsMargins(2, 2, 2, 2)
+
+		self.deleteImgBtn = QPushButton("")
+		self.deleteImgBtn.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+		self.deleteImgBtn.setFixedSize(35,35)
+		self.deleteImgBtn.clicked.connect(self.deleteImg)
+		self.btnLayout.addWidget(self.deleteImgBtn)
+
+		self.rotateImgClBtn = QPushButton("")
+		self.rotateImgClBtn.setFixedSize(35,35)
+		# self.rotateIconPixmap = QPixmap("./icons/rotate_clockwise.png")
+		self.rotateIconPixmap = QPixmap(resource_path("rotate_clockwise.png"))
+		self.rotateClIcon = QIcon(self.rotateIconPixmap)
+		self.rotateImgClBtn.setIcon(self.rotateClIcon)
+		self.rotateImgClBtn.clicked.connect(lambda:self.rotateImg(1))
+		self.btnLayout.addWidget(self.rotateImgClBtn)
+
+		self.rotateImgCClBtn = QPushButton("")
+		self.rotateImgCClBtn.setFixedSize(35,35)
+		transform = QTransform().scale(-1.0, 1.0)
+		self.rotateCClIcon = QIcon(self.rotateIconPixmap.transformed(transform, Qt.SmoothTransformation))
+		self.rotateImgCClBtn.setIcon(self.rotateCClIcon)
+		self.rotateImgCClBtn.clicked.connect(lambda:self.rotateImg(-1))
+		self.btnLayout.addWidget(self.rotateImgCClBtn)
+
+		self.btnLayout.addStretch(2)
+
 		self.renameBtn = QPushButton("Rename")
+		self.renameBtn.setFixedWidth(200)
+		self.renameBtn.setMinimumHeight(35)
 		self.renameBtn.clicked.connect(self.rename)
-		self.bottomWidget.layout().addWidget(self.renameBtn)
+		self.btnLayout.addWidget(self.renameBtn)
+
+		self.btnLayout.addStretch(3)
+
+		self.bottomWidget.layout().addLayout(self.btnLayout)
 
 		self.tagsManager = TagsManager(self.loadState())
 		self.bottomWidget.layout().addWidget(self.tagsManager)
@@ -488,8 +825,10 @@ class MainWindow(QWidget):
 		self.splitter.addWidget(self.topWidget)
 		self.splitter.addWidget(self.bottomWidget)
 		self.splitter.setSizes([800, 100])
-# 
+ 		
 		self.layout().addWidget(self.splitter)
+
+		self.setStyleSheet(stylesheet)
 
 	def folderChange(self, folder):
 		self.folder = folder
@@ -497,6 +836,32 @@ class MainWindow(QWidget):
 
 	def refreshPrompt(self):
 		self.imageDisplay.refresh()
+
+	def deleteImg(self):
+		currentFile = self.currentFile()
+		if currentFile:
+			ret = QMessageBox.question(self,'', "Do you really want to delete the file?", QMessageBox.Yes | QMessageBox.No)
+			if ret == QMessageBox.Yes:
+				try:
+					send2trash(currentFile)
+					self.imageDisplay.discardCurrent()
+				except Exception as e:
+					print(e)
+					print("failure to delete the file %s" % currentFile)
+
+	def rotateImg(self, direction):
+		currentFile = self.currentFile()
+		if currentFile:
+			try:
+				im = Image.open(currentFile)
+				if direction == 1:
+					im = im.transpose(Image.ROTATE_270)
+				elif direction == -1:
+					im = im.transpose(Image.ROTATE_90)
+				im.save(currentFile)
+				self.imageDisplay.refreshFile()
+			except Exception as e:
+				print(e)
 
 	def rename(self):
 		currentFile = self.currentFile()
@@ -551,12 +916,27 @@ class MainWindow(QWidget):
 				config = json.load(f)
 				return config
 
+	def mousePressEvent(self, e):
+		self.tagsManager.acceptTabsNames()
+		super(MainWindow, self).mousePressEvent(e)
+
 	def closeEvent(self, e):
 		self.saveState()
 		super(MainWindow, self).closeEvent(e)
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+# Logo = resource_path("Logo.png")
 app = QApplication(sys.argv)
-window = MainWindow("C:\\")
+window = MainWindow("C:")
 # window = MainWindow("D:\\__Personnel\\Photos\\1ere annee au canada 2015 hiver printemps\\")
 window.show()
 app.exec()
